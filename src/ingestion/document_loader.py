@@ -1,9 +1,11 @@
 """
 src/ingestion/document_loader.py
-Loads PDF documents and splits them into chunks.
+Loads content from PDF files or URLs and splits into chunks.
 """
 
 import fitz  # PyMuPDF
+import requests
+from bs4 import BeautifulSoup
 from pathlib import Path
 from dataclasses import dataclass
 from typing import List
@@ -33,12 +35,50 @@ def load_pdf(pdf_path: str) -> List[dict]:
     return pages
 
 
+def load_url(url: str) -> List[dict]:
+    """Fetches and extracts text content from a URL."""
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        # Remove scripts, styles, navbars
+        for tag in soup(["script", "style", "nav", "footer", "header"]):
+            tag.decompose()
+
+        # Extract clean text
+        text = soup.get_text(separator="\n", strip=True)
+
+        # Remove empty lines
+        lines = [line for line in text.splitlines() if len(line.strip()) > 30]
+        clean_text = "\n".join(lines)
+
+        if not clean_text:
+            return []
+
+        # Split into ~500 word virtual "pages"
+        words = clean_text.split()
+        pages = []
+        chunk_size = 500
+        for i in range(0, len(words), chunk_size):
+            chunk = " ".join(words[i:i + chunk_size])
+            pages.append({
+                "text": chunk,
+                "page": (i // chunk_size) + 1,
+                "source": url
+            })
+
+        return pages
+
+    except Exception as e:
+        print(f"[!] Failed to load URL {url}: {e}")
+        return []
+
+
 def chunk_text(pages: List[dict], chunk_size: int = 500, overlap: int = 50) -> List[DocumentChunk]:
-    """
-    Splits text into overlapping chunks.
-    chunk_size: number of words per chunk
-    overlap: number of words shared between consecutive chunks
-    """
+    """Splits text into overlapping chunks."""
     chunks = []
     chunk_id = 0
 
@@ -83,11 +123,3 @@ def process_documents(pdf_folder: str) -> List[DocumentChunk]:
 
     print(f"\n[OK] Total: {len(all_chunks)} chunks ready")
     return all_chunks
-
-
-if __name__ == "__main__":
-    chunks = process_documents("data/raw")
-    if chunks:
-        print(f"\nSample chunk:\n{'-'*40}")
-        print(f"Source: {chunks[0].source}, Page: {chunks[0].page}")
-        print(f"Text: {chunks[0].text[:200]}...")
