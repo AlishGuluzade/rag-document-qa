@@ -188,20 +188,7 @@ with col1:
 
         st.divider()
 
-        # ── Chat history ─────────────────────────────────────────
-        for item in reversed(st.session_state.chat_history):
-            with st.chat_message("assistant"):
-                st.write(item["answer"])
-                with st.expander(f"📚 {len(item['sources'])} {T['sources_label']}"):
-                    for src in item["sources"]:
-                        st.markdown(
-                            f"**{src['file']}** — {T['page_label']} {src['page']} "
-                            f"({T['relevance']}: {src['relevance']})"
-                        )
-                        st.caption(src.get("preview", ""))
-            with st.chat_message("user"):
-                st.write(item["query"])
-
+        # ── Chat input on top ────────────────────────────────────
         query = st.chat_input(T["chat_input"])
         if query:
             if not selected_sources:
@@ -222,6 +209,17 @@ with col1:
                     )
                 st.session_state.chat_history.append(response)
                 st.rerun()
+
+        # Chat history below input
+        for item in reversed(st.session_state.chat_history):
+            with st.chat_message("user"):
+                st.write(item["query"])
+            with st.chat_message("assistant"):
+                st.write(item["answer"])
+                with st.expander(f"📚 {len(item['sources'])} sources"):
+                    for src in item["sources"]:
+                        st.markdown(f"**{src['file']}** — Page {src['page']} (relevance: {src['relevance']})")
+                        st.caption(src.get("preview", ""))
 
 with col2:
     if st.session_state.vector_store:
