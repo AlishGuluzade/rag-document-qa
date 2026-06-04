@@ -1,7 +1,7 @@
 """
 app/streamlit_app.py
 RAG Document Q&A System — Streamlit UI (EN / AZ)
-Supports PDF upload and URL input.
+Supports PDF upload and URL input with source filtering.
 """
 
 import streamlit as st
@@ -15,7 +15,6 @@ from src.ingestion.document_loader import load_pdf, load_url, chunk_text
 from src.retrieval.vector_store import VectorStore
 from src.generation.rag_chain import SimpleRAGChain
 
-# ── Language strings ─────────────────────────────────────────────
 LANG = {
     "en": {
         "title": "📄 RAG Document Q&A System",
@@ -31,7 +30,6 @@ LANG = {
         "url_error": "Could not load URL. Please check the link.",
         "slider": "How many chunks to retrieve?",
         "build_btn": "🔍 Build Index",
-        "processing": "Processing documents...",
         "indexing": "Building vector index...",
         "success": "chunks indexed!",
         "metric_chunks": "Total chunks",
@@ -47,6 +45,9 @@ LANG = {
         "metric_vectors": "Indexed vectors",
         "metric_questions": "Questions asked",
         "clear_btn": "🗑️ Clear history",
+        "filter_title": "🔎 Search in",
+        "filter_all": "All sources",
+        "no_source": "Please select at least one source.",
     },
     "az": {
         "title": "📄 RAG Document Q&A Sistemi",
@@ -62,7 +63,6 @@ LANG = {
         "url_error": "Link yüklənmədi. Linki yoxlayın.",
         "slider": "Neçə parça axtarılsın?",
         "build_btn": "🔍 İndeks qur",
-        "processing": "Emal edilir...",
         "indexing": "Vektor indeksi qurulur...",
         "success": "parça indeksləndi!",
         "metric_chunks": "Cəmi chunk",
@@ -78,17 +78,19 @@ LANG = {
         "metric_vectors": "İndekslənmiş vektor",
         "metric_questions": "Sual sayı",
         "clear_btn": "🗑️ Tarixi təmizlə",
+        "filter_title": "🔎 Axtarış yeri",
+        "filter_all": "Bütün mənbələr",
+        "no_source": "Ən azı bir mənbə seçin.",
     }
 }
 
-# ── Page config ──────────────────────────────────────────────────
-st.set_page_config(
-    page_title="RAG Document Q&A",
-    page_icon="📄",
-    layout="wide"
-)
+st.set_page_config(page_title="RAG Document Q&A", page_icon="📄", layout="wide")
 
-# ── Session state ────────────────────────────────────────────────
+if "all_chunks" not in st.session_state:
+    st.session_state.all_chunks = []
+if "sources" not in st.session_state:
+    # {name: [chunks]} dict
+    st.session_state.sources = {}
 if "vector_store" not in st.session_state:
     st.session_state.vector_store = None
 if "chat_history" not in st.session_state:
@@ -97,10 +99,6 @@ if "rag_chain" not in st.session_state:
     st.session_state.rag_chain = SimpleRAGChain()
 if "lang" not in st.session_state:
     st.session_state.lang = "en"
-if "all_chunks" not in st.session_state:
-    st.session_state.all_chunks = []
-if "source_count" not in st.session_state:
-    st.session_state.source_count = 0
 
 # ── Sidebar ──────────────────────────────────────────────────────
 with st.sidebar:
@@ -115,66 +113,59 @@ with st.sidebar:
         st.rerun()
 
     T = LANG[st.session_state.lang]
-
     st.divider()
     st.header(T["sidebar_header"])
 
     pdf_tab, url_tab = st.tabs([T["pdf_tab"], T["url_tab"]])
 
-    # ── PDF tab ──
     with pdf_tab:
         uploaded_files = st.file_uploader(
-            T["uploader"],
-            type=["pdf"],
-            accept_multiple_files=True
+            T["uploader"], type=["pdf"], accept_multiple_files=True
         )
         if uploaded_files:
             for uploaded_file in uploaded_files:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-                    tmp.write(uploaded_file.read())
-                    tmp_path = tmp.name
-                pages = load_pdf(tmp_path)
-                chunks = chunk_text(pages)
-                for chunk in chunks:
-                    chunk.source = uploaded_file.name
-                # Avoid duplicates
-                existing_sources = {c.source for c in st.session_state.all_chunks}
-                if uploaded_file.name not in existing_sources:
-                    st.session_state.all_chunks.extend(chunks)
-                    st.session_state.source_count += 1
-                os.unlink(tmp_path)
+                if uploaded_file.name not in st.session_state.sources:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                        tmp.write(uploaded_file.read())
+                        tmp_path = tmp.name
+                    pages = load_pdf(tmp_path)
+                    chunks = chunk_text(pages)
+                    for chunk in chunks:
+                        chunk.source = uploaded_file.name
+                    st.session_state.sources[uploaded_file.name] = chunks
+                    os.unlink(tmp_path)
 
-    # ── URL tab ──
     with url_tab:
         url_input = st.text_input(T["url_input"], placeholder="https://example.com")
         if st.button(T["url_btn"]) and url_input:
-            with st.spinner(T["url_loading"]):
-                pages = load_url(url_input)
-                if pages:
-                    chunks = chunk_text(pages)
-                    existing_sources = {c.source for c in st.session_state.all_chunks}
-                    if url_input not in existing_sources:
-                        st.session_state.all_chunks.extend(chunks)
-                        st.session_state.source_count += 1
-                    st.success(f"✅ {len(chunks)} {T['url_success']}")
-                else:
-                    st.error(T["url_error"])
+            if url_input not in st.session_state.sources:
+                with st.spinner(T["url_loading"]):
+                    pages = load_url(url_input)
+                    if pages:
+                        chunks = chunk_text(pages)
+                        for chunk in chunks:
+                            chunk.source = url_input
+                        st.session_state.sources[url_input] = chunks
+                        st.success(f"✅ {len(chunks)} {T['url_success']}")
+                    else:
+                        st.error(T["url_error"])
 
     st.divider()
     top_k = st.slider(T["slider"], min_value=1, max_value=10, value=5)
 
-    if st.session_state.all_chunks and st.button(T["build_btn"], type="primary"):
+    if st.session_state.sources and st.button(T["build_btn"], type="primary"):
+        all_chunks = []
+        for chunks in st.session_state.sources.values():
+            all_chunks.extend(chunks)
         with st.spinner(T["indexing"]):
             store = VectorStore()
-            store.build(st.session_state.all_chunks)
+            store.build(all_chunks)
             st.session_state.vector_store = store
-        st.success(f"✅ {len(st.session_state.all_chunks)} {T['success']}")
-        st.metric(T["metric_chunks"], len(st.session_state.all_chunks))
-        st.metric(T["metric_docs"], st.session_state.source_count)
+            st.session_state.all_chunks = all_chunks
+        st.success(f"✅ {len(all_chunks)} {T['success']}")
 
 # ── Main panel ───────────────────────────────────────────────────
 T = LANG[st.session_state.lang]
-
 st.title(T["title"])
 st.caption(T["caption"])
 
@@ -184,9 +175,21 @@ with col1:
     if st.session_state.vector_store is None:
         st.info(T["info"])
     else:
-        for item in st.session_state.chat_history:
-            with st.chat_message("user"):
-                st.write(item["query"])
+        # ── Source filter ────────────────────────────────────────
+        st.subheader(T["filter_title"])
+        source_names = list(st.session_state.sources.keys())
+
+        selected_sources = []
+        cols = st.columns(min(len(source_names), 3))
+        for i, name in enumerate(source_names):
+            short = name if len(name) < 30 else name[:27] + "..."
+            if cols[i % 3].checkbox(short, value=True, key=f"src_{name}"):
+                selected_sources.append(name)
+
+        st.divider()
+
+        # ── Chat history ─────────────────────────────────────────
+        for item in reversed(st.session_state.chat_history):
             with st.chat_message("assistant"):
                 st.write(item["answer"])
                 with st.expander(f"📚 {len(item['sources'])} {T['sources_label']}"):
@@ -196,34 +199,36 @@ with col1:
                             f"({T['relevance']}: {src['relevance']})"
                         )
                         st.caption(src.get("preview", ""))
+            with st.chat_message("user"):
+                st.write(item["query"])
 
         query = st.chat_input(T["chat_input"])
         if query:
-            with st.chat_message("user"):
-                st.write(query)
-            with st.chat_message("assistant"):
+            if not selected_sources:
+                st.warning(T["no_source"])
+            else:
                 with st.spinner(T["searching"]):
-                    results = st.session_state.vector_store.search(query, top_k=top_k)
+                    # Filter chunks by selected sources
+                    filtered_chunks = []
+                    for name in selected_sources:
+                        filtered_chunks.extend(st.session_state.sources[name])
+
+                    # Build temp index from selected sources only
+                    temp_store = VectorStore()
+                    temp_store.build(filtered_chunks)
+                    results = temp_store.search(query, top_k=top_k)
                     response = st.session_state.rag_chain.answer(
                         query, results, lang=st.session_state.lang
                     )
-                st.write(response["answer"])
-                with st.expander(f"📚 {len(response['sources'])} {T['sources_show']}"):
-                    for src in response["sources"]:
-                        st.markdown(
-                            f"**{src['file']}** — {T['page_label']} {src['page']} "
-                            f"({T['relevance']}: {src['relevance']})"
-                        )
-                        if "preview" in src:
-                            st.caption(src["preview"])
-            st.session_state.chat_history.append(response)
+                st.session_state.chat_history.append(response)
+                st.rerun()
 
 with col2:
     if st.session_state.vector_store:
         st.subheader(T["stats_title"])
-        store = st.session_state.vector_store
-        st.metric(T["metric_vectors"], store.index.ntotal)
+        st.metric(T["metric_vectors"], st.session_state.vector_store.index.ntotal)
         st.metric(T["metric_questions"], len(st.session_state.chat_history))
+        st.metric(T["metric_docs"], len(st.session_state.sources))
         if st.button(T["clear_btn"]):
             st.session_state.chat_history = []
             st.rerun()
