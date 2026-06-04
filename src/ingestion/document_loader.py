@@ -3,7 +3,7 @@ src/ingestion/document_loader.py
 Loads content from PDF files or URLs and splits into chunks.
 """
 
-import fitz  # PyMuPDF
+from pypdf import PdfReader
 import requests
 from bs4 import BeautifulSoup
 from pathlib import Path
@@ -21,17 +21,16 @@ class DocumentChunk:
 
 def load_pdf(pdf_path: str) -> List[dict]:
     """Reads each page from a PDF file."""
-    doc = fitz.open(pdf_path)
+    reader = PdfReader(pdf_path)
     pages = []
-    for page_num, page in enumerate(doc):
-        text = page.get_text("text").strip()
-        if text:
+    for page_num, page in enumerate(reader.pages):
+        text = page.extract_text()
+        if text and text.strip():
             pages.append({
-                "text": text,
+                "text": text.strip(),
                 "page": page_num + 1,
                 "source": Path(pdf_path).name
             })
-    doc.close()
     return pages
 
 
@@ -44,21 +43,16 @@ def load_url(url: str) -> List[dict]:
 
         soup = BeautifulSoup(response.text, "html.parser")
 
-        # Remove scripts, styles, navbars
         for tag in soup(["script", "style", "nav", "footer", "header"]):
             tag.decompose()
 
-        # Extract clean text
         text = soup.get_text(separator="\n", strip=True)
-
-        # Remove empty lines
         lines = [line for line in text.splitlines() if len(line.strip()) > 30]
         clean_text = "\n".join(lines)
 
         if not clean_text:
             return []
 
-        # Split into ~500 word virtual "pages"
         words = clean_text.split()
         pages = []
         chunk_size = 500
@@ -102,24 +96,3 @@ def chunk_text(pages: List[dict], chunk_size: int = 500, overlap: int = 50) -> L
             start += chunk_size - overlap
 
     return chunks
-
-
-def process_documents(pdf_folder: str) -> List[DocumentChunk]:
-    """Processes all PDFs in the given folder."""
-    folder = Path(pdf_folder)
-    all_chunks = []
-
-    pdf_files = list(folder.glob("*.pdf"))
-    if not pdf_files:
-        print(f"[!] No PDF files found in {pdf_folder}.")
-        return []
-
-    for pdf_path in pdf_files:
-        print(f"[+] Loading: {pdf_path.name}")
-        pages = load_pdf(str(pdf_path))
-        chunks = chunk_text(pages)
-        all_chunks.extend(chunks)
-        print(f"    -> {len(pages)} pages, {len(chunks)} chunks")
-
-    print(f"\n[OK] Total: {len(all_chunks)} chunks ready")
-    return all_chunks
